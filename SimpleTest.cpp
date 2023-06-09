@@ -7,7 +7,7 @@
 
 #define PAGE_ADDRESS_WIDTH static_cast<uint64_t> (log2(PAGE_SIZE))
 
-uint64_t getPi(uint64_t virtualAddress, int index) {
+uint64_t GetPi(uint64_t virtualAddress, int index) {
     // creates a mask with log2(PAGE_SIZE) bits turned on, on the right:
 //    // shifts the mask to position of p_index:
 //    mask = mask << (VIRTUAL_ADDRESS_WIDTH - (PAGE_ADDRESS_WIDTH * index));
@@ -33,9 +33,9 @@ int main(int argc, char **argv) {
 //    printf("success\n");
 //
 //    return 0;
-    printf("The uint64_t value is: %" PRIu64 "\n", getPi(62775,1));
-    printf("The uint64_t value is: %" PRIu64 "\n", getPi(62775,2));
-    printf("The uint64_t value is: %" PRIu64 "\n", getPi(62775,3));
-    printf("The uint64_t value is: %" PRIu64 "\n", getPi(62775,4));
-    printf("The uint64_t value is: %" PRIu64 "\n", getPi(62775,5));
+    printf("The uint64_t value is: %" PRIu64 "\n", GetPi(62775, 1));
+    printf("The uint64_t value is: %" PRIu64 "\n", GetPi(62775, 2));
+    printf("The uint64_t value is: %" PRIu64 "\n", GetPi(62775, 3));
+    printf("The uint64_t value is: %" PRIu64 "\n", GetPi(62775, 4));
+    printf("The uint64_t value is: %" PRIu64 "\n", GetPi(62775, 5));
 }
