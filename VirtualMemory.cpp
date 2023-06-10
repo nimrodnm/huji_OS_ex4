@@ -59,10 +59,7 @@ void InitFrame(word_t frameIdx, bool initPage, uint64_t pageIdx) {
 }
 
 /**
- * Change the parentData according to the priority noted in the pdf:
- * 0. parentDate.maxFrameIdx = max(child.maxFrameIdx, parent.maxFrameIdx)
- * 1. if childData.foundEmpty -> set parentData.foundEmpty and all the relevant fields.
- * 2. if chil
+ * Change the parentData according to the priority noted in the pdf
  */
 void UpdateDfsData(DfsData &childData, DfsData &parentData) {
     if (childData.foundEmpty) {
@@ -85,15 +82,31 @@ void UpdateDfsData(DfsData &childData, DfsData &parentData) {
 //TODO: handle PMread/write/etc errors.
 // TODO: edge case TABLE_DEPTH = 0
 
+/**
+ * Uses recursive DFS to traverse the hierarchical page table, while maintaining a DfsData struct instance that holds
+ * the data needed for finding a frame in the RAM.
+ * @param virtualAddress The virtual address that we want to map to the physical memory.
+ * @param ignoreFrameIdx The index of the last frame that was visited before the page fault occurred. This frame will
+ *                       be empty, but we'll ignore that and won't consider it as an available frame.
+ * @param cumulativePageIdx An accumulated value, calculated while traversing the hierarchical page table.
+ *                          When we get to a leaf in the table (the base of the recursion), it will hold the page
+ *                          index in the virtual memory which represents the leaf we are at.
+ * @param currDepth The current depth in the hierarchical page table.
+ * @param currFrameIdx The index of the current frame that we are at.
+ * @param parentFrameIdx The index of the frame that we got from in the DFS algorithm.
+ * @param offsetInParent The offset in the parent frame, where the current frame index is at.
+ * @return the DfsData that holds the current data we have in our DFS traversal.
+ */
 DfsData HandlePageFaultHelper(uint64_t virtualAddress,
-                              uint64_t cumulativePageIdx,
-                              int currDepth,
-                              word_t currFrameIdx,
-                              word_t parentFrameIdx,
-                              uint64_t offsetInParent,
-                              word_t ignoreFrameIdx) {
+                              word_t ignoreFrameIdx,
+                              uint64_t cumulativePageIdx = 0,
+                              int currDepth = 0,
+                              word_t currFrameIdx = 0,
+                              word_t parentFrameIdx = 0,
+                              uint64_t offsetInParent = 0) {
     DfsData dfsData = {false, currFrameIdx, 0, 0, 0, 0, cumulativePageIdx};
-    if (currDepth == TABLES_DEPTH) {  // leaf base case
+    // Leaf base case:
+    if (currDepth == TABLES_DEPTH) {
         dfsData.maxCyclicDist = calculateCyclicDistance(cumulativePageIdx, GetPageIdx(virtualAddress));
         dfsData.resultFrameIdx = currFrameIdx;
         dfsData.resultPageIdx = cumulativePageIdx;
@@ -110,14 +123,15 @@ DfsData HandlePageFaultHelper(uint64_t virtualAddress,
         if (currChildFrameIdx != 0) {
             emptyFrame = false;
             DfsData currChildDfsData = HandlePageFaultHelper(virtualAddress,
+                                                             ignoreFrameIdx,
                                                              updateCumulativePageIdx(cumulativePageIdx, offset),
                                                              currDepth + 1,
                                                              currChildFrameIdx,
                                                              currFrameIdx,
-                                                             offset,
-                                                             ignoreFrameIdx);
+                                                             offset);
             UpdateDfsData(currChildDfsData, dfsData);
-            if (dfsData.foundEmpty) {  // TODO: this relies on UpdateDfsData to update the foundEmpty flag according to the flag of the child.
+            // trusts that UpdateDfsData updated the foundEmpty flag according to the flag of the child:
+            if (dfsData.foundEmpty) {
                 return dfsData;
             }
         }
@@ -135,40 +149,49 @@ DfsData HandlePageFaultHelper(uint64_t virtualAddress,
     return dfsData;
 }
 
-
+/**
+ * Uses the helper function to traverse the hierarchical page table in DFS order, keeping the relevant data in a
+ * DfsData struct instance.
+ * Then removes the link to the targetFrame from its parentFrame (if it was linked already),
+ * links it to its new parent (lastBeforeFaultFrame), and initializes it.
+ * @param virtualAddress The virtual address that we want to map to the physical memory.
+ * @param lastBeforeFaultFrameIdx The index of the last frame that was visited before the page fault occurred.
+ * @param lastBeforeFaultOffset The offset in the last frame that was visited before the page fault occurred.
+ * @param level The level in the hierarchical page table where the page fault occurred.
+ * @return the index of the frame in the RAM that was mapped for the faulty node.
+ */
 word_t HandlePageFault(uint64_t virtualAddress,
                        word_t lastBeforeFaultFrameIdx,
                        uint64_t lastBeforeFaultOffset,
                        int level) {
-    auto dfsResult = HandlePageFaultHelper(virtualAddress, 0, 0, 0, 0, 0,lastBeforeFaultFrameIdx);
+    auto dfsResult = HandlePageFaultHelper(virtualAddress, lastBeforeFaultFrameIdx);
+    word_t targetFrameIdx;
+
     if (dfsResult.foundEmpty) {
         // remove the link to the empty frame from its parent:
         PMwrite((dfsResult.resultFrameParentIdx * PAGE_SIZE) + dfsResult.resultFrameOffsetInParent, 0);
-        // link the empty frame to the lastBeforeFaultFrameIdx:
-        PMwrite((lastBeforeFaultFrameIdx * PAGE_SIZE) + lastBeforeFaultOffset, dfsResult.resultFrameIdx);
-        InitFrame(dfsResult.resultFrameIdx, (level == TABLES_DEPTH), GetPageIdx(virtualAddress));
-        return dfsResult.resultFrameIdx;
-    } else if ((dfsResult.maxFrameIdx + 1) < NUM_FRAMES) { //TODO: NUM_PAGES or NUM_PAGES-1??
-        // link the empty frame to the lastBeforeFaultFrameIdx:
-        PMwrite((lastBeforeFaultFrameIdx * PAGE_SIZE) + lastBeforeFaultOffset, dfsResult.maxFrameIdx + 1);
-        InitFrame(dfsResult.maxFrameIdx + 1, (level == TABLES_DEPTH), GetPageIdx((virtualAddress)));
-        return dfsResult.maxFrameIdx + 1;
+        targetFrameIdx = dfsResult.resultFrameIdx;
+    } else if ((dfsResult.maxFrameIdx + 1) < NUM_FRAMES) {
+        targetFrameIdx = dfsResult.maxFrameIdx + 1;
     } else {
         // remove the link to the frame from its parent:
         PMwrite((dfsResult.resultFrameParentIdx * PAGE_SIZE) + dfsResult.resultFrameOffsetInParent, 0);
-        // link the empty frame to the lastBeforeFaultFrameIdx:
-        PMwrite((lastBeforeFaultFrameIdx * PAGE_SIZE) + lastBeforeFaultOffset, dfsResult.resultFrameIdx);
         PMevict(dfsResult.resultFrameIdx, dfsResult.resultPageIdx);
-        InitFrame(dfsResult.resultFrameIdx, (level == TABLES_DEPTH), GetPageIdx((virtualAddress)));
-        return dfsResult.resultFrameIdx;
+        targetFrameIdx = dfsResult.resultFrameIdx;
     }
+
+    // link the empty frame to the lastBeforeFaultFrameIdx:
+    PMwrite((lastBeforeFaultFrameIdx * PAGE_SIZE) + lastBeforeFaultOffset, targetFrameIdx);
+    InitFrame(targetFrameIdx, (level == TABLES_DEPTH), GetPageIdx(virtualAddress));
+    return targetFrameIdx;
 }
 
 //TODO: delete:
 #include <cstdio>
-void PrintMemory(){
+
+void PrintMemory() {
     printf("---------------------------\n");
-    for (int i=0; i < RAM_SIZE; i++){
+    for (int i = 0; i < RAM_SIZE; i++) {
         word_t value;
         PMread(i, &value);
         printf("idx:%d, value:%d\n", i, value);
@@ -177,10 +200,11 @@ void PrintMemory(){
 }
 
 /**
- * gets a physical address in the ram, that is mapped to the page given from the virtualAddress.
- * if a page fault occures during the run of the function, the page fault handler is called to solve it.
+ * Gets a physical address in the ram, that is mapped to the page index in the given virtualAddress.
+ * if a page fault occurs during the run of the function, the page fault handler is called to solve it.
  * @param virtualAddress a number with VIRTUAL_ADDRESS_WIDTH bits. the right most OFFSET_WIDTH bits are the offset in
- * the designated frame. and the VIRTUAL_ADDRESS_WIDTH-OFFSET_WIDTH left most bits are the pageIdx in the virtual memory.
+ *                       the designated frame. and the VIRTUAL_ADDRESS_WIDTH-OFFSET_WIDTH left most bits are the
+ *                       pageIdx in the virtual memory.
  * @return the physical address in the ram. a number with PHYSICAL_ADDRESS_WIDTH bits.
  */
 uint64_t GetPhysicalAddress(uint64_t virtualAddress) {
@@ -200,19 +224,29 @@ uint64_t GetPhysicalAddress(uint64_t virtualAddress) {
 
 void VMinitialize() {
     // TODO: is this good?
-    for (int cell=0; cell<PAGE_SIZE; cell++){
+    for (int cell = 0; cell < PAGE_SIZE; cell++) {
         PMwrite(cell, 0);
     }
 }
 
+// TODO: when can this fail?
 int VMread(uint64_t virtualAddress, word_t *value) {
+    if ((virtualAddress >= VIRTUAL_MEMORY_SIZE) || (value == nullptr)) {
+        return 0;
+    }
     uint64_t physicalAddress = GetPhysicalAddress(virtualAddress);
     PMread(physicalAddress, value);
+    return 1;
 }
 
+// TODO: when can this fail?
 int VMwrite(uint64_t virtualAddress, word_t value) {
+    if (virtualAddress >= VIRTUAL_MEMORY_SIZE) {
+        return 0;
+    }
     uint64_t physicalAddress = GetPhysicalAddress(virtualAddress);
     PMwrite(physicalAddress, value);
+    return 1;
 }
 
 
