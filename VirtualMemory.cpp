@@ -1,7 +1,7 @@
 #include <cmath>
 
 #include "VirtualMemory.h"
-#include "PhysicalMemory.h.tests"
+#include "PhysicalMemory.h"
 
 #define PAGE_ADDRESS_WIDTH static_cast<uint64_t> (log2(PAGE_SIZE))
 #define FRAME0_ADDRESS_WIDTH (VIRTUAL_ADDRESS_WIDTH - OFFSET_WIDTH - (PAGE_ADDRESS_WIDTH*(TABLES_DEPTH - 1)))
