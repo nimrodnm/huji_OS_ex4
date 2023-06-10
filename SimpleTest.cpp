@@ -2,8 +2,6 @@
 
 #include <cstdio>
 #include <cassert>
-#include <inttypes.h>
-#include <cmath>
 
 
 
