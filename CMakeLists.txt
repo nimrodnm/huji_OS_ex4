@@ -10,5 +10,5 @@ add_executable(huji_OS_ex4
         PhysicalMemory.cpp
         PhysicalMemory.h
         SimpleTest.cpp
-#        VirtualMemory.cpp
+        VirtualMemory.cpp
         VirtualMemory.h VirtualMemory.cpp)
