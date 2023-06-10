@@ -18,8 +18,8 @@ add_executable(huji_OS_ex4
 
 # cmake for tests from git:
 #cmake_minimum_required(VERSION 3.1)
-#
-#
+
+
 #
 ## Project configuration
 #project(ex4 VERSION 1.0 LANGUAGES C CXX)
@@ -35,7 +35,7 @@ add_executable(huji_OS_ex4
 #        # add your own files here
 #        )
 #
-#set(vm_compile_options -Wall -Wextra -g -O2)
+#set(vm_compile_options -Wall -Wextra -g)
 #
 #
 ## ------------ Do not modify anything below these lines ------------- #

@@ -1,13 +1,11 @@
-#pragma once
-
-// TODO: can we use cmath?
 #include <cmath>
 
 #include "VirtualMemory.h"
-#include "PhysicalMemory.h"
+#include "PhysicalMemory.h.tests"
 
-// TODO: is PAGE_SIZE a power of 2?
 #define PAGE_ADDRESS_WIDTH static_cast<uint64_t> (log2(PAGE_SIZE))
+#define FRAME0_ADDRESS_WIDTH (VIRTUAL_ADDRESS_WIDTH - OFFSET_WIDTH - (PAGE_ADDRESS_WIDTH*(TABLES_DEPTH - 1)))
+#define FRAME0_USED_SIZE (1LL << FRAME0_ADDRESS_WIDTH)
 
 typedef struct {
     bool foundEmpty;
@@ -19,12 +17,21 @@ typedef struct {
     uint64_t resultPageIdx;
 } DfsData;
 
+uint64_t GetIndexInRam(word_t frameIdx, uint64_t offset) {
+    return (frameIdx * PAGE_SIZE) + offset;
+}
 
 uint64_t GetPi(uint64_t virtualAddress, int index) {
+    if (index == 1) {
+        uint64_t mask = FRAME0_USED_SIZE - 1;
+        return (virtualAddress >> (VIRTUAL_ADDRESS_WIDTH - FRAME0_ADDRESS_WIDTH)) & mask;
+    }
+
     // creates a mask with log2(PAGE_SIZE) bits turned on, on the right:
     uint64_t mask = PAGE_SIZE - 1;
     // shifts the virtualAddress to the right according to the index given and activates the mask:
-    return (virtualAddress >> (VIRTUAL_ADDRESS_WIDTH - (PAGE_ADDRESS_WIDTH * index))) & mask;
+    return (virtualAddress >> (VIRTUAL_ADDRESS_WIDTH - FRAME0_ADDRESS_WIDTH - (PAGE_ADDRESS_WIDTH * (index - 1)))) &
+           mask;
 }
 
 uint64_t GetOffset(uint64_t virtualAddress) {
@@ -38,7 +45,10 @@ uint64_t GetPageIdx(uint64_t virtualAddress) {
     return virtualAddress >> OFFSET_WIDTH;
 }
 
-uint64_t updateCumulativePageIdx(uint64_t cumulativePageIdx, uint64_t offset) {
+uint64_t updateCumulativePageIdx(uint64_t cumulativePageIdx, uint64_t offset, bool isFrame0) {
+    if (isFrame0){
+        return (cumulativePageIdx << FRAME0_ADDRESS_WIDTH) + offset;
+    }
     return (cumulativePageIdx << PAGE_ADDRESS_WIDTH) + offset;
 }
 
@@ -63,7 +73,6 @@ void InitFrame(word_t frameIdx, bool initPage, uint64_t pageIdx) {
  */
 void UpdateDfsData(DfsData &childData, DfsData &parentData) {
     if (childData.foundEmpty) {
-        // TODO: is it really copying?
         parentData = childData;
         return;
     }
@@ -79,8 +88,7 @@ void UpdateDfsData(DfsData &childData, DfsData &parentData) {
     }
 }
 
-//TODO: handle PMread/write/etc errors.
-// TODO: edge case TABLE_DEPTH = 0
+//TODO: do we need to check if all of the frames contain table entries so we don't have page to evict? is that an error?
 
 /**
  * Uses recursive DFS to traverse the hierarchical page table, while maintaining a DfsData struct instance that holds
@@ -115,16 +123,18 @@ DfsData HandlePageFaultHelper(uint64_t virtualAddress,
         return dfsData;
     }
 
+    uint64_t frameSize = (currFrameIdx == 0) ? FRAME0_USED_SIZE : PAGE_SIZE;
+
     bool emptyFrame = true;
     // Iterating over the entries of the current frame, recursively exploring each one of them:
-    for (uint64_t offset = 0; offset < PAGE_SIZE; offset++) {
+    for (uint64_t offset = 0; offset < frameSize; offset++) {
         word_t currChildFrameIdx;
-        PMread((currFrameIdx * PAGE_SIZE) + offset, &currChildFrameIdx);
+        PMread(GetIndexInRam(currFrameIdx, offset), &currChildFrameIdx);
         if (currChildFrameIdx != 0) {
             emptyFrame = false;
             DfsData currChildDfsData = HandlePageFaultHelper(virtualAddress,
                                                              ignoreFrameIdx,
-                                                             updateCumulativePageIdx(cumulativePageIdx, offset),
+                                                             updateCumulativePageIdx(cumulativePageIdx, offset, (currFrameIdx == 0)),
                                                              currDepth + 1,
                                                              currChildFrameIdx,
                                                              currFrameIdx,
@@ -169,34 +179,21 @@ word_t HandlePageFault(uint64_t virtualAddress,
 
     if (dfsResult.foundEmpty) {
         // remove the link to the empty frame from its parent:
-        PMwrite((dfsResult.resultFrameParentIdx * PAGE_SIZE) + dfsResult.resultFrameOffsetInParent, 0);
+        PMwrite(GetIndexInRam(dfsResult.resultFrameParentIdx, dfsResult.resultFrameOffsetInParent), 0);
         targetFrameIdx = dfsResult.resultFrameIdx;
     } else if ((dfsResult.maxFrameIdx + 1) < NUM_FRAMES) {
         targetFrameIdx = dfsResult.maxFrameIdx + 1;
     } else {
         // remove the link to the frame from its parent:
-        PMwrite((dfsResult.resultFrameParentIdx * PAGE_SIZE) + dfsResult.resultFrameOffsetInParent, 0);
+        PMwrite(GetIndexInRam(dfsResult.resultFrameParentIdx, dfsResult.resultFrameOffsetInParent), 0);
         PMevict(dfsResult.resultFrameIdx, dfsResult.resultPageIdx);
         targetFrameIdx = dfsResult.resultFrameIdx;
     }
 
     // link the empty frame to the lastBeforeFaultFrameIdx:
-    PMwrite((lastBeforeFaultFrameIdx * PAGE_SIZE) + lastBeforeFaultOffset, targetFrameIdx);
+    PMwrite(GetIndexInRam(lastBeforeFaultFrameIdx, lastBeforeFaultOffset), targetFrameIdx);
     InitFrame(targetFrameIdx, (level == TABLES_DEPTH), GetPageIdx(virtualAddress));
     return targetFrameIdx;
-}
-
-//TODO: delete:
-#include <cstdio>
-
-void PrintMemory() {
-    printf("---------------------------\n");
-    for (int i = 0; i < RAM_SIZE; i++) {
-        word_t value;
-        PMread(i, &value);
-        printf("idx:%d, value:%d\n", i, value);
-    }
-    printf("---------------------------\n");
 }
 
 /**
@@ -208,28 +205,25 @@ void PrintMemory() {
  * @return the physical address in the ram. a number with PHYSICAL_ADDRESS_WIDTH bits.
  */
 uint64_t GetPhysicalAddress(uint64_t virtualAddress) {
-    //TODO: does FrameIdx need to be word_t?
     word_t currFrameIdx = 0;
     for (int level = 1; level <= TABLES_DEPTH; level++) {
         uint64_t currPi = GetPi(virtualAddress, level);
         word_t prevFrameIdx = currFrameIdx;
-        PMread((currFrameIdx * PAGE_SIZE) + currPi, &currFrameIdx);
+        PMread(GetIndexInRam(currFrameIdx, currPi), &currFrameIdx);
         if (currFrameIdx == 0) {
             currFrameIdx = HandlePageFault(virtualAddress, prevFrameIdx, currPi, level);
         }
     }
     uint64_t offset = GetOffset(virtualAddress);
-    return (currFrameIdx * PAGE_SIZE) + offset;
+    return GetIndexInRam(currFrameIdx, offset);
 }
 
 void VMinitialize() {
-    // TODO: is this good?
     for (int cell = 0; cell < PAGE_SIZE; cell++) {
         PMwrite(cell, 0);
     }
 }
 
-// TODO: when can this fail?
 int VMread(uint64_t virtualAddress, word_t *value) {
     if ((virtualAddress >= VIRTUAL_MEMORY_SIZE) || (value == nullptr)) {
         return 0;
@@ -239,7 +233,6 @@ int VMread(uint64_t virtualAddress, word_t *value) {
     return 1;
 }
 
-// TODO: when can this fail?
 int VMwrite(uint64_t virtualAddress, word_t value) {
     if (virtualAddress >= VIRTUAL_MEMORY_SIZE) {
         return 0;
