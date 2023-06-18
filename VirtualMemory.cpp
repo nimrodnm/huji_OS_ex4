@@ -1,10 +1,7 @@
-#include <cmath>
-
 #include "VirtualMemory.h"
 #include "PhysicalMemory.h"
 
-#define PAGE_ADDRESS_WIDTH static_cast<uint64_t> (log2(PAGE_SIZE))
-#define FRAME0_ADDRESS_WIDTH (VIRTUAL_ADDRESS_WIDTH - OFFSET_WIDTH - (PAGE_ADDRESS_WIDTH*(TABLES_DEPTH - 1)))
+#define FRAME0_ADDRESS_WIDTH (VIRTUAL_ADDRESS_WIDTH - OFFSET_WIDTH - (OFFSET_WIDTH*(TABLES_DEPTH - 1)))
 #define FRAME0_USED_SIZE (1LL << FRAME0_ADDRESS_WIDTH)
 
 typedef struct {
@@ -30,7 +27,7 @@ uint64_t GetPi(uint64_t virtualAddress, int index) {
     // creates a mask with log2(PAGE_SIZE) bits turned on, on the right:
     uint64_t mask = PAGE_SIZE - 1;
     // shifts the virtualAddress to the right according to the index given and activates the mask:
-    return (virtualAddress >> (VIRTUAL_ADDRESS_WIDTH - FRAME0_ADDRESS_WIDTH - (PAGE_ADDRESS_WIDTH * (index - 1)))) &
+    return (virtualAddress >> (VIRTUAL_ADDRESS_WIDTH - FRAME0_ADDRESS_WIDTH - (OFFSET_WIDTH * (index - 1)))) &
            mask;
 }
 
@@ -49,7 +46,7 @@ uint64_t updateCumulativePageIdx(uint64_t cumulativePageIdx, uint64_t offset, bo
     if (isFrame0){
         return (cumulativePageIdx << FRAME0_ADDRESS_WIDTH) + offset;
     }
-    return (cumulativePageIdx << PAGE_ADDRESS_WIDTH) + offset;
+    return (cumulativePageIdx << OFFSET_WIDTH) + offset;
 }
 
 uint64_t calculateCyclicDistance(uint64_t pageIdx1, uint64_t pageIdx2) {

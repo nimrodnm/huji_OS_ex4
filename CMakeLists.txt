@@ -16,10 +16,11 @@ add_executable(huji_OS_ex4
         VirtualMemory.cpp
         VirtualMemory.h)
 
+
 # cmake for tests from git:
 #cmake_minimum_required(VERSION 3.1)
-
-
+#
+#
 #
 ## Project configuration
 #project(ex4 VERSION 1.0 LANGUAGES C CXX)
